@@ -1,0 +1,177 @@
+##Sequence Processing - Abaco Sponges
+# 19 April 2016
+
+
+multiple_join_paired_ends.py -i Abaco_sponge_MiSeqRun/ -o joined_ends/
+
+#Convert .fastq files to .fna files
+
+nano convert_fastq.sh
+
+#! /bin/bash
+#Shell script to automate fastq to fasta conversion
+
+for file in $(<sample_names.txt)
+do
+    convert_fastaqual_fastq.py -f merged_fastq_directory/${file}.fastq -c fastq_to_fastaqual -F -o converted_merged_reads
+
+done
+
+#Control+X, Y, enter will exit from nano while saving your modified program
+
+#exit nano and run program
+chmod +x convert_fastq.sh
+./convert_fastq.sh
+
+add_qiime_labels.py -i converted_merged_reads/ -m experiment_map.txt -c InputFileName -n 1 -o combined_seqs/
+
+count_seqs.py -i combined_seqs/combined_seqs.fna
+
+#OUTPUT
+#3070183  : combined_seqs/combined_seqs.fna (Sequence lengths (mean +/- std): 291.1197 +/- 12.9963)
+#3070183  : Total
+
+#For a summary of the sequences use Mothur commands within QIIME
+#Call mothur
+mothur
+#Summary stats of sequences
+summary.seqs(fasta=combined_seqs/combined_seqs.fna)
+
+#OUTPUT
+#Start	End	NBases	Ambigs	Polymer	NumSeqs
+#Minimum:	1	35	35	0	2	1
+#2.5%-tile:	1	291	291	0	4	76755
+#25%-tile:	1	292	292	0	4	767546
+#Median: 	1	292	292	0	4	1535092
+#75%-tile:	1	292	292	0	5	2302638
+#97.5%-tile:	1	293	293	0	6	2993429
+#Maximum:	1	596	596	35	35	3070183
+#Mean:	1	299.894	299.894	0.001254	4.45091
+## of Seqs:	3070183
+
+
+#Screen Sequences outside of the expected length of product ~ expected range for EMP 16S primers
+screen.seqs(fasta=current, minlength=285, maxlength=295, maxambig=0, maxhomop=8)
+summary.seqs(fasta=current)
+
+#OUTPUT
+#Start	End	NBases	Ambigs	Polymer	NumSeqs
+#Minimum:	1	285	285	0	3	1
+#2.5%-tile:	1	292	292	0	4	76196
+#25%-tile:	1	292	292	0	4	761953
+#Median: 	1	292	292	0	4	1523905
+#75%-tile:	1	292	292	0	5	2285857
+#97.5%-tile:	1	293	293	0	6	2971613
+#Maximum:	1	295	295	0	8	3047808
+#Mean:	1	300.728	300.728	0	4.44261
+## of Seqs:	3047808
+
+quit()
+
+#Chimera searching using the ucsearch closed reference algorithm against greengenes database
+vsearch --uchime_ref combined_seqs.good.fna --db 97_otus.fasta --nonchimeras combined_seqs.good.nonchimera_ref.fna
+
+#OUTPUT
+#Found 313685 (10.3%) chimeras, 2698143 (88.5%) non-chimeras,
+#and 35980 (1.2%) suspicious candidates in 3047808 sequences.
+
+pick_otus.py -i combined_seqs.good.nonchimera_ref.fna -m uclust -o uclust_picked_otus/ -s 0.97
+
+mkdir uclust_rep_seqs/
+
+#Pick representative sequences [Make sure to check the name of you input file so that it matches the script below]
+pick_rep_set.py -i uclust_picked_otus/combined_seqs.good.nonchimera_ref_otus.txt -f combined_seqs.good.nonchimera_ref.fna -o uclust_rep_seqs/uclust_rep_seqs.fasta -l uclust_rep_seqs/uclust_rep_seqs.log
+count_seqs.py -i uclust_rep_seqs/uclust_rep_seqs.fasta
+
+#OUTPUT
+146260  : uclust_rep_seqs/uclust_rep_seqs.fasta (Sequence lengths (mean +/- std): 292.0063 +/- 0.5108)
+146260  : Total
+
+align_seqs.py -i uclust_rep_seqs/uclust_rep_seqs.fasta -o pynast_aligned/ -e 100
+
+filter_alignment.py -i seqs_rep_set_aligned.fasta -o filtered_alignment/ -r
+
+#OUTPUT
+#143808  : pynast_aligned/filtered_alignment/uclust_rep_seqs_aligned_pfiltered.fasta (Sequence lengths (mean +/- std): 477.0000 +/- 0.0000)
+#143808  : Total
+
+assign_taxonomy.py -i filtered_alignment/uclust_rep_seqs_aligned_pfiltered.fasta -m rdp -c 0.8
+
+make_otu_table.py -i uclust_picked_otus/combined_seqs.good.nonchimera_ref_otus.txt -o out_table.biom -e pynast_aligned/uclust_rep_seqs_failures.fasta -t pynast_aligned/rdp_assigned_taxonomy/uclust_rep_seqs_aligned_pfiltered_tax_assignments.txt 
+
+filter_otus_from_otu_table.py -i otu_table.biom -o filtered_otu_table.biom -n 3
+
+#OUTPUT
+#Num samples: 46
+#Num observations: 33305
+#Total count: 2564161
+#Table density (fraction of non-zero values): 0.133
+#
+#Counts/sample summary:
+# Min: 10.0
+# Max: 102811.0
+# Median: 55235.500
+# Mean: 55742.630
+# Std. dev.: 20858.420
+# Sample Metadata Categories: None provided
+# Observation Metadata Categories: taxonomy
+
+filter_taxa_from_otu_table.py -i filtered_otu_table.biom -o filtered_otu_table_nounclassified.biom -n None,Unclassified
+
+
+##Remove OTUs that are in negative control
+filter_samples_from_otu_table.py -i filtered_otu_table_nounclassified.biom -o otu_tableblank.biom -m experiment_map.txt -s "Sample_Type:NA"
+filter_otus_from_otu_table.py -i otu_tableblank.biom -o filtered_otu_tableblank.biom -n 1
+biom convert -i filtered_otu_tableblank.biom -o otus_to_remove.txt --to-tsv --table-type="OTU table"
+filter_otus_from_otu_table.py -i filtered_otu_table_nounclassified.biom -o otu_table_minus_cont.biom -e otus_to_remove.txt 
+filter_samples_from_otu_table.py -i otu_table_minus_cont.biom -o filtered_otu_table_nounclass_nocontam.biom -n 1
+
+
+biom summarize_table -i filtered_otu_table_nounclass_nocontam.biom -o summary_filtered_otu_table.txt
+
+#OUTPUT
+#Num samples: 44
+#Num observations: 20844
+#Total count: 266728
+#Table density (fraction of non-zero values): 0.068
+#
+#Counts/sample summary:
+# Min: 6062.0
+# Max: 6062.0
+# Median: 6062.000
+# Mean: 6062.000
+# Std. dev.: 0.000
+# Sample Metadata Categories: None provided
+# Observation Metadata Categories: taxonomy
+
+
+core_diversity_analyses.py -i filtered_otu_table_nounclass_nocontam.biom -m experiment_map.txt -o core_diversity_analyses -e 6062 --nonphylogenetic_diversity -c Sample_Type -a -O 12
+
+biom convert -i filtered_otu_table_nounclass_nocontam.biom -o filtered_otu_table_nounclass_nocontam.txt --to-tsv --table-type="OTU table" --header-key taxonomy --output-metadata-id "taxonomy"
+
+
+#PICRUST predicted metagenome analysis
+#Must build OTU table using closed OTU picking within QIIME
+#Build parameter file by adding picking parameters to text document
+#NOTE: $PWD/ refers to your present working directory and will change for each analysis
+echo "pick_otus:enable_rev_strand_match True"  >> $PWD/otu_picking_params_97.txt
+echo "pick_otus:similarity 0.97" >> $PWD/otu_picking_params_97.txt
+
+#OTUs must be picked against greengenes 13.5
+#passing -a tells QIIME to run in parallel where possible -O sets the number of processors/cores to be used
+pick_closed_reference_otus.py -i combined_seqs.good.nonchimera_ref.fna -o closed_otus_gg13_5/ -r 97_otus.fasta -t 97_otu_taxonomy.txt -a -O 12
+#Convert biom file to json -- to do this I need to convert biom to txt and back to json format on qiime 1.8 (planthopper computer)
+biom convert -i closed_otus_gg13_5/otu_table.biom -o otu_table_classic.txt --to-tsv --table-type="OTU table" --header-key taxonomy
+
+#The biom file in the output can then be put into PiCRUST on the GALAXY website and the output files downloaded and renamed appropriately and with .biom 
+
+#Analysis of the level 3 predicted metagenome
+summarize_taxa_through_plots.py -i categorized_by_functionL3.biom -p qiime_parameters.txt -o plots_at_level3/
+
+group_significance.py -i categorized_by_functionL3.biom -o group_sig_L3.txt -m experiment_map.txt -c Sample_Type -s kruskal_wallis
+
+
+
+
+
+
